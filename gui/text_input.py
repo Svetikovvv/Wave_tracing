@@ -34,12 +34,9 @@ class TextInput:
         pygame.draw.rect(screen, bg_color, self.rect, border_radius=8)
         border_color = (100, 100, 100)
         pygame.draw.rect(screen, border_color, self.rect, 2, border_radius=8)
-
-        txt_surface = self.font.render(self.text, True, (0, 0, 0))
-        screen.blit(txt_surface, (self.rect.x + 10, self.rect.y + (self.rect.height - txt_surface.get_height()) // 2))
-
+        txt_surf = self.font.render(self.text, True, (0, 0, 0))
+        screen.blit(txt_surf, (self.rect.x + 10, self.rect.y + (self.rect.height - txt_surf.get_height()) // 2))
         if self.active and self.cursor_visible:
-            cursor_x = self.rect.x + 10 + txt_surface.get_width() + 2
+            cursor_x = self.rect.x + 10 + txt_surf.get_width() + 2
             cursor_y = self.rect.y + (self.rect.height - self.font.get_height()) // 2
-            cursor_height = self.font.get_height()
-            pygame.draw.line(screen, (0, 0, 0), (cursor_x, cursor_y), (cursor_x, cursor_y + cursor_height), 2)
+            pygame.draw.line(screen, (0, 0, 0), (cursor_x, cursor_y), (cursor_x, cursor_y + self.font.get_height()), 2)

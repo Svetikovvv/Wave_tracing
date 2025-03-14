@@ -1,23 +1,23 @@
-import pygame
-import sys
-import math
-import json
+import pygame, sys, math
 import tkinter as tk
 from tkinter import filedialog
 from gui.buttons import Button
 from gui.text_input import TextInput
+from gui.board import Board
+from gui.menubar import MenuBar
+from gui.file_manager import FileManager
+from gui.tracer import Tracer
 
 class MainWindow:
     def __init__(self, width=800, height=600, grid_size=8):
-        # Параметры окна
         self.width = width
         self.height = height
         self.grid_size = grid_size
+
         self.screen = pygame.display.set_mode((self.width, self.height))
         pygame.display.set_caption("Интерфейс трассировки")
         self.clock = pygame.time.Clock()
 
-        # Тема оформления (цвета)
         self.theme = {
             "background": (240, 240, 240),
             "board_bg": (250, 250, 250),
@@ -35,537 +35,433 @@ class MainWindow:
             }
         }
 
-        # Размер меню-бар
         self.menu_bar_height = 30
-
-        # Отступы и размеры поля трассировки
-        self.top_margin = self.menu_bar_height + 10  # учитываем меню
+        self.top_margin = self.menu_bar_height + 10
         self.bottom_margin = 40
         self.left_margin = 20
-        self.board_size = 450  # размер поля трассировки
 
-        # Поле трассировки
-        self.board_x = self.left_margin
-        self.board_y = self.top_margin
-        self.board_rect = pygame.Rect(self.board_x, self.board_y, self.board_size, self.board_size)
+        # Определяем ширину панели кнопок справа (одна колонка)
+        self.panel_width = 150
+        # Рабочее поле занимает оставшуюся ширину:
+        self.board_size = self.width - self.left_margin - self.panel_width - 20  # 20 – дополнительный отступ
 
-        # Параметры сетки
-        self.rows = self.grid_size
-        self.cols = self.grid_size
-        self.cell_size = self.board_rect.width // self.cols
-        self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
-
-        # Строка состояния
+        self.board_rect = pygame.Rect(self.left_margin, self.top_margin, self.board_size, self.board_size)
+        self.board = Board(self.board_rect, grid_size, self.theme)
         self.status_message = ""
-        self.hover_status = None
+        self.hover_status = ""
         self.status_font = pygame.font.SysFont("Segoe UI", 18)
-        status_bar_height = 30
-        self.status_bar_rect = pygame.Rect(
-            10,
-            self.height - self.bottom_margin,
-            self.width - 20,
-            status_bar_height
-        )
+        self.status_bar_rect = pygame.Rect(10, self.height - self.bottom_margin, self.width - 20, 30)
 
-        # Режимы работы: "obstacle" для установки препятствий, "combined" для установки точек A/B.
-        self.current_mode = None
-        self.combined_step = None
-
-        # Текстовое поле для изменения размера
+        self.current_mode = None   # "obstacle" или "combined"
+        self.combined_step = None  # "start" или "end"
         self.text_input = None
+        self.file_manager = FileManager()
+        self.current_file = None
 
-        # Для работы с файлами
-        self.current_file = None  # путь к открытому файлу (если есть)
-
-        # Список кнопок и словарь для кнопок режимов (для анимации)
-        self.buttons = []
-        self.mode_buttons = {}  # ключи: "obstacle", "combined"
-        self.setup_buttons()  # <-- теперь метод определён!
-
-        # Таймер для анимации подсветки активного режима
         self.highlight_timer = 0
 
-        # Инициализация верхнего меню
-        self.init_menu()
+        self.step_mode = False
+        self.step_generator = None
+
+# Правые кнопки (в одном столбце)
+        self.buttons = []
+        self.mode_buttons = {}
+        self.setup_buttons()
+
+        self.menu_bar = MenuBar(self.width, self.menu_bar_height, self.theme)
+        menu_callbacks = {
+            "Новый файл": self.new_file,
+            "Открыть": self.load_board_data,
+            "Сохранить": self.save_board_data,
+            "Очистить всё": self.clear_board,
+            "Очистить преп.": self.clear_obstacles,
+            "Очистить A/B": self.clear_startend,
+            "Размер": self.activate_size_input,
+            "Трасс.": self.start_tracing,
+            # Убираем существующую кнопку пошаговой трассировки, заменяем её на режим:
+            "Пошаг. режим": self.activate_step_mode,
+            # Добавляем кнопку "Шаг":
+            "Шаг": self.perform_step,
+            "Убрать тр." : self.clear_tracing()
+        }
+        self.menu_bar.set_callbacks(menu_callbacks)
 
     def setup_buttons(self):
-        """
-        Создает кнопки для управления полем.
-        Разбито на две группы:
-         1. Первая группа (две колонки):
-            - Строка 0: "Препятствие" и "Убрать преп."
-            - Строка 1: "Старт/Финиш" и "Убрать A/B"
-         2. Вторая группа (объединённая колонка):
-            - "Очистить всё", "Размер", "Трасс.", "Пошаг", "Стоп", "Загрузить", "Сохранить", "Новый файл"
-        """
+        # Создаем правую панель с 4 кнопками в одном столбце
         button_height = 45
-        spacing_v = 10  # вертикальный отступ
-        spacing_h = 10  # горизонтальный отступ между колонками
+        spacing_v = 10
+        column_x = self.board_rect.right + 20
+        total_buttons = 4
+        group_total_height = total_buttons * button_height + (total_buttons - 1) * spacing_v
+        start_y = self.board_rect.top + (self.board_rect.height - group_total_height) // 2
 
-        # Координаты для первой группы (две колонки)
-        left_col_x = self.board_rect.right + 20
-        right_col_x = left_col_x + 130 + spacing_h  # ширина кнопки = 130
-
-        # Всего строк в первой группе = 2
-        total_rows_first_group = 2
-        group1_total_height = total_rows_first_group * button_height + (total_rows_first_group - 1) * spacing_v
-
-        # Начало размещения первой группы – вертикально центрировано относительно поля
-        start_y = self.board_rect.top + (self.board_rect.height - group1_total_height - 8 * (button_height + spacing_v)) // 2
-
-        # Первая строка – кнопки для препятствий
-        row_y = start_y
         btn_obstacle = Button(
-            left_col_x, row_y,
-            130, button_height,
-            "Препятствие",
-            self.set_mode_obstacle,
+            column_x, start_y, 130, button_height,
+            "Препятствие", self.set_mode_obstacle,
             tooltip="Установить препятствие (ЛКМ)"
         )
         btn_clear_obstacles = Button(
-            right_col_x, row_y,
-            130, button_height,
-            "Убрать преп.",
-            self.clear_obstacles,
-            tooltip="Удалить только препятствия"
+            column_x, start_y + button_height + spacing_v, 130, button_height,
+            "Убрать преп.", self.clear_obstacles,
+            tooltip="Удалить препятствия"
         )
-        self.mode_buttons["obstacle"] = btn_obstacle
-
-        # Вторая строка – кнопки для точек старта/финиша
-        row_y += button_height + spacing_v
         btn_startend = Button(
-            left_col_x, row_y,
-            130, button_height,
-            "Старт/Финиш",
-            self.set_mode_startend,
-            tooltip="Установить ячейки A и B"
+            column_x, start_y + 2*(button_height + spacing_v), 130, button_height,
+            "Старт/Финиш", self.set_mode_startend,
+            tooltip="Установить A и B"
         )
+        # Пример добавления кнопки для пошаговой трассировки
+        btn_step_mode = Button(
+            column_x, start_y + 4*(button_height + spacing_v), 130, button_height,
+            "Пошаг. режим", self.activate_step_mode,
+            tooltip="Активировать пошаговую трассировку"
+        )
+        # Изменение: добавляем кнопку "Шаг" для выполнения одного шага
+        btn_step = Button(
+            column_x, start_y + 5*(button_height + spacing_v), 130, button_height,
+            "Шаг", self.perform_step,
+            tooltip="Выполнить следующий шаг трассировки"
+        )
+
+
+        btn_clear_trace = Button(
+            column_x,
+            start_y + 6*(button_height + spacing_v),  # примерное положение ниже остальных
+            130,
+            button_height,
+            "Убрать тр.",
+            self.clear_tracing,
+            tooltip="Убрать визуализацию трассировки"
+        )
+        self.buttons.append(btn_clear_trace)
+
         btn_clear_startend = Button(
-            right_col_x, row_y,
-            130, button_height,
-            "Убрать A/B",
-            self.clear_startend,
-            tooltip="Удалить точки старта и финиша"
+            column_x, start_y + 3*(button_height + spacing_v), 130, button_height,
+            "Убрать A/B", self.clear_startend,
+            tooltip="Удалить A и B"
         )
+
+        self.mode_buttons["obstacle"] = btn_obstacle
         self.mode_buttons["combined"] = btn_startend
 
-        # Вторая группа – объединённая колонка
-        combined_width = 130 * 2 + spacing_h
-        group2_start_y = row_y + button_height + spacing_v
+        self.buttons.extend([btn_obstacle, btn_clear_obstacles, btn_startend, btn_clear_startend,
+                             btn_clear_trace, btn_step_mode, btn_step])
 
-        btn_clear_all = Button(
-            left_col_x, group2_start_y,
-            combined_width, button_height,
-            "Очистить всё",
-            self.clear_board,
-            tooltip="Сбросить поле (препятствия и точки)"
-        )
-        btn_size = Button(
-            left_col_x, group2_start_y + (button_height + spacing_v),
-            combined_width, button_height,
-            "Размер",
-            self.activate_size_input,
-            tooltip="Изменить размер поля"
-        )
-        btn_trace = Button(
-            left_col_x, group2_start_y + 2*(button_height + spacing_v),
-            combined_width, button_height,
-            "Трасс.",
-            self.start_tracing,
-            tooltip="Запустить трассировку"
-        )
-        btn_step_trace = Button(
-            left_col_x, group2_start_y + 3*(button_height + spacing_v),
-            combined_width, button_height,
-            "Пошаг",
-            self.step_trace,
-            tooltip="Пошаговая трассировка"
-        )
-        btn_stop_trace = Button(
-            left_col_x, group2_start_y + 4*(button_height + spacing_v),
-            combined_width, button_height,
-            "Стоп",
-            self.stop_tracing,
-            tooltip="Остановить трассировку"
-        )
-        btn_load = Button(
-            left_col_x, group2_start_y + 5*(button_height + spacing_v),
-            combined_width, button_height,
-            "Загрузить",
-            self.load_board_data,
-            tooltip="Загрузить данные поля из файла"
-        )
-        btn_save = Button(
-            left_col_x, group2_start_y + 6*(button_height + spacing_v),
-            combined_width, button_height,
-            "Сохранить",
-            self.save_board_data,
-            tooltip="Сохранить изменения в файл"
-        )
-        btn_new = Button(
-            left_col_x, group2_start_y + 7*(button_height + spacing_v),
-            combined_width, button_height,
-            "Новый файл",
-            self.new_file,
-            tooltip="Создать новый файл (очистить поле)"
-        )
+    def activate_step_mode(self):
+        start = None
+        finish = None
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] == 2:
+                    start = (r, c)
+                elif self.board.board[r][c] == 3:
+                    finish = (r, c)
+        if not start or not finish:
+            self.set_status("Не заданы и старт, и финиш")
+            return
 
-        self.buttons.extend([
-            btn_obstacle,
-            btn_clear_obstacles,
-            btn_startend,
-            btn_clear_startend,
-            btn_clear_all,
-            btn_size,
-            btn_trace,
-            btn_step_trace,
-            btn_stop_trace,
-            btn_load,
-            btn_save,
-            btn_new
-        ])
+        # Копия поля
+        prop_grid = [row.copy() for row in self.board.board]
+        prop_grid[start[0]][start[1]] = 0
+        prop_grid[finish[0]][finish[1]] = 0
 
-    def init_menu(self):
-        """Инициализирует структуру верхнего меню."""
-        self.menu_items = {
-            "Файл": [
-                ("Новый файл", self.new_file),
-                ("Открыть", self.load_board_data),
-                ("Сохранить", self.save_board_data),
-                ("Выход", sys.exit)
-            ],
-            "Правка": [
-                ("Очистить всё", self.clear_board),
-                ("Очистить преп.", self.clear_obstacles),
-                ("Очистить A/B", self.clear_startend),
-                ("Размер", self.activate_size_input)
-            ],
-            "Трассировка": [
-                ("Трасс.", self.start_tracing),
-                ("Пошаг", self.step_trace),
-                ("Стоп", self.stop_tracing)
-            ]
-        }
-        self.menu_positions = {}
-        self.active_menu = None
-        self.active_menu_items = []
+        tracer = Tracer(prop_grid)
+        self.step_generator = tracer.step_by_step_trace(start, finish)
+        self.step_mode = True
+        self.set_status("Пошаговый режим трассировки включён. Нажмите 'Шаг'.")
 
-    def draw_menu_bar(self):
-        """Отрисовывает строку меню в верхней части окна."""
-        menu_rect = pygame.Rect(0, 0, self.width, self.menu_bar_height)
-        pygame.draw.rect(self.screen, self.theme["menu_bg"], menu_rect)
-        font = pygame.font.SysFont("Segoe UI", 18)
-        padding = 10
-        x_offset = padding
-        self.menu_positions = {}
-        for menu_title in self.menu_items.keys():
-            text_surf = font.render(menu_title, True, self.theme["menu_text"])
-            text_rect = text_surf.get_rect(topleft=(x_offset, (self.menu_bar_height - text_surf.get_height()) // 2))
-            self.screen.blit(text_surf, text_rect)
-            self.menu_positions[menu_title] = pygame.Rect(x_offset, 0, text_rect.width, self.menu_bar_height)
-            x_offset += text_rect.width + 2 * padding
-        if self.active_menu:
-            self.draw_dropdown(self.active_menu)
+    # Изменение: метод для выполнения одного шага трассировки
+    def perform_step(self):
+        if not self.step_mode or self.step_generator is None:
+            self.set_status("Пошаговая трассировка не активирована.")
+            return
 
-    def draw_dropdown(self, menu_title):
-        """Отрисовывает выпадающее меню для выбранного пункта."""
-        items = self.menu_items[menu_title]
-        font = pygame.font.SysFont("Segoe UI", 16)
-        dropdown_width = 150
-        item_height = 25
-        menu_rect = self.menu_positions[menu_title]
-        dropdown_x = menu_rect.x
-        dropdown_y = menu_rect.bottom
-        dropdown_rect = pygame.Rect(dropdown_x, dropdown_y, dropdown_width, item_height * len(items))
-        pygame.draw.rect(self.screen, self.theme["menu_bg"], dropdown_rect)
-        pygame.draw.rect(self.screen, self.theme["grid_color"], dropdown_rect, 1)
-        self.active_menu_items = []
-        for index, (item_text, callback) in enumerate(items):
-            item_rect = pygame.Rect(dropdown_x, dropdown_y + index * item_height, dropdown_width, item_height)
-            if item_rect.collidepoint(pygame.mouse.get_pos()):
-                pygame.draw.rect(self.screen, self.theme["menu_hover"], item_rect)
-            text_surf = font.render(item_text, True, self.theme["menu_text"])
-            text_rect = text_surf.get_rect()
-            text_rect.centery = item_rect.centery
-            text_rect.x = item_rect.x + 5
-            self.screen.blit(text_surf, text_rect)
-            self.active_menu_items.append((item_text, item_rect, callback))
+        try:
+            iteration, wave_start, wave_finish, meeting = next(self.step_generator)
+            self.board.wave_start = wave_start
+            self.board.wave_finish = wave_finish
 
-    def handle_menu_event(self, event):
-        """Обрабатывает клики в меню."""
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            pos = event.pos
-            for title, rect in self.menu_positions.items():
-                if rect.collidepoint(pos):
-                    if self.active_menu == title:
-                        self.active_menu = None
-                    else:
-                        self.active_menu = title
-                    return True
-            if self.active_menu:
-                for item_text, item_rect, callback in self.active_menu_items:
-                    if item_rect.collidepoint(pos):
-                        callback()
-                        self.active_menu = None
-                        return True
-                self.active_menu = None
-        return False
+            # Перерисовка экрана с текущим состоянием
+            self.screen.fill(self.theme["background"])
+            self.board.draw(self.screen)
+            for button in self.buttons:
+                button.draw(self.screen)
+            if self.text_input:
+                self.text_input.draw(self.screen)
+            self.draw_status_bar()
+            self.menu_bar.draw(self.screen)
+            pygame.display.flip()
 
-    def clear_board(self):
-        """Полностью очищает поле (препятствия и точки)."""
-        self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
-        self.set_status("Поле очищено")
-        self.current_mode = None
-        self.combined_step = None
+            self.set_status(f"Итерация {iteration} выполнена.")
+            if meeting:
+                self.set_status(f"Встреча волн в клетке {meeting}. Трассировка завершена.")
+                # Восстанавливаем итоговый путь с использованием волновых данных
+                # Находим старт и финиш (из оригинального поля, где A и B сохранены)
+                start = None
+                finish = None
+                for r in range(self.board.rows):
+                    for c in range(self.board.cols):
+                        if self.board.board[r][c] == 2:
+                            start = (r, c)
+                        elif self.board.board[r][c] == 3:
+                            finish = (r, c)
+                if start is None or finish is None:
+                    self.set_status("Старт и финиш не найдены")
+                    return
+                path_s = Tracer.reconstruct_path(wave_start, start, meeting)
+                path_f = Tracer.reconstruct_path(wave_finish, finish, meeting)
+                path_f.reverse()
+                full_path = path_s + path_f[1:]
+                # Изменение: маркируем итоговый путь значением 5 (новый цвет)
+                for (r, c) in full_path:
+                    if self.board.board[r][c] not in (2, 3):
+                        self.board.board[r][c] = 5
 
-    def clear_obstacles(self):
-        """Удаляет препятствия (ячейки со значением 1)."""
-        for row in range(self.rows):
-            for col in range(self.cols):
-                if self.board[row][col] == 1:
-                    self.board[row][col] = 0
-        self.set_status("Все препятствия удалены")
+                self.step_mode = False
+                self.step_generator = None
+
+        except StopIteration:
+            self.set_status("Пошаговая трассировка завершена.")
+            self.step_mode = False
+            self.step_generator = None
+
+
+    def clear_tracing(self):
+        """
+        Убирает визуализацию трассировки (волны и путь).
+        """
+        self.board.wave_start = None
+        self.board.wave_finish = None
+        # Убираем клетки пути
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] in (4, 5):
+                    self.board.board[r][c] = 0
+        self.set_status("Трассировка убрана")
 
     def clear_startend(self):
-        """Удаляет точки старта и финиша (ячейки 2 и 3) и сбрасывает режим."""
-        for row in range(self.rows):
-            for col in range(self.cols):
-                if self.board[row][col] in (2, 3):
-                    self.board[row][col] = 0
+        """
+        Убирает A и B, а также трассировку.
+        """
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] in (2, 3):
+                    self.board.board[r][c] = 0
+        # Убираем трассировку
+        self.clear_tracing()
         self.current_mode = None
         self.combined_step = None
-        self.set_status("Старт и конец удалены")
+        self.set_status("Старт/Финиш удалены")
+
+    def clear_board(self):
+        """
+        Полностью очищает поле, включая путь и волны.
+        """
+        self.board.board = [[0 for _ in range(self.board.cols)] for _ in range(self.board.rows)]
+        self.board.wave_start = None
+        self.board.wave_finish = None
+        self.current_mode = None
+        self.combined_step = None
+        self.set_status("Поле очищено")
+
+
+
+    def clear_obstacles(self):
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] == 1:
+                    self.board.board[r][c] = 0
+        self.set_status("Препятствия удалены")
+
+
+
 
     def activate_size_input(self):
-        """Активирует текстовое поле для ввода нового размера сетки."""
+        # Поле для ввода нового размера появляется в правом верхнем углу под меню
         input_width = 80
         input_height = 35
-        last_button = self.buttons[-1]
-        new_y = last_button.rect.bottom + 20
-        self.text_input = TextInput(
-            last_button.rect.x,
-            new_y,
-            input_width,
-            input_height,
-            font_size=20,
-            initial_text=str(self.grid_size)
-        )
-        self.set_status("Введите число ячеек и нажмите Enter")
+        new_x = self.width - input_width - 20
+        new_y = self.menu_bar_height + 5
+        self.text_input = TextInput(new_x, new_y, input_width, input_height, 20, str(self.board.grid_size))
+        self.set_status("Введите новый размер")
 
     def load_board_data(self):
-        """Загружает данные поля из файла (JSON или CSV)."""
-        root = tk.Tk()
-        root.withdraw()
-        filename = filedialog.askopenfilename(
-            title="Выберите файл с данными",
-            filetypes=[("JSON Files", "*.json"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
-        )
-        if not filename:
-            self.set_status("Файл не выбран")
-            return
-        try:
-            if filename.lower().endswith(".json"):
-                with open(filename, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                new_size = data.get("grid_size", self.grid_size)
-                new_board = data.get("board", self.board)
-            elif filename.lower().endswith(".csv"):
-                new_board = []
-                with open(filename, "r", encoding="utf-8") as f:
-                    for line in f:
-                        row = list(map(int, line.strip().split(",")))
-                        new_board.append(row)
-                new_size = len(new_board)
-            else:
-                self.set_status("Неподдерживаемый формат файла")
-                return
-            self.grid_size = new_size
-            self.rows = new_size
-            self.cols = new_size
-            self.board = new_board
-            self.cell_size = self.board_rect.width // self.cols
-            self.current_file = filename
-            self.set_status("Данные загружены из файла")
-        except Exception as e:
-            self.set_status(f"Ошибка загрузки: {e}")
+        grid_size, board_data = self.file_manager.load()
+        if grid_size and board_data:
+            self.board.update_size(grid_size)
+            self.board.board = board_data
+            self.current_file = self.file_manager.current_file
+            self.set_status("Данные загружены")
 
     def save_board_data(self):
-        """Сохраняет данные поля в файл (JSON или CSV)."""
-        if self.current_file:
-            filename = self.current_file
-        else:
+        if self.current_file is None:
             root = tk.Tk()
             root.withdraw()
-            filename = filedialog.asksaveasfilename(
-                title="Сохранить файл",
-                defaultextension=".json",
-                filetypes=[("JSON Files", "*.json"), ("CSV Files", "*.csv"), ("All Files", "*.*")]
-            )
+            filename = filedialog.asksaveasfilename(title="Сохранить", defaultextension=".json",
+                                                    filetypes=[("JSON Files", "*.json"), ("CSV Files", "*.csv")])
             if not filename:
                 self.set_status("Сохранение отменено")
                 return
             self.current_file = filename
-        try:
-            if filename.lower().endswith(".json"):
-                data = {
-                    "grid_size": self.grid_size,
-                    "board": self.board
-                }
-                with open(filename, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=4)
-            elif filename.lower().endswith(".csv"):
-                with open(filename, "w", encoding="utf-8") as f:
-                    for row in self.board:
-                        line = ",".join(map(str, row))
-                        f.write(line + "\n")
-            else:
-                self.set_status("Неподдерживаемый формат для сохранения")
-                return
+        if self.file_manager.save(self.current_file, self.board.grid_size, self.board.board):
             self.set_status("Данные сохранены")
-        except Exception as e:
-            self.set_status(f"Ошибка сохранения: {e}")
 
     def new_file(self):
-        """Создает новый файл (очищает поле и сбрасывает путь к файлу)."""
         self.clear_board()
         self.current_file = None
-        self.set_status("Создан новый файл (поле очищено)")
+        self.set_status("Создан новый файл")
 
     def set_mode_obstacle(self):
-        """Включает режим установки препятствий."""
         self.current_mode = "obstacle"
         self.combined_step = None
-        self.set_status("Режим: установка препятствия (ЛКМ)")
+        self.set_status("Режим препятствий")
 
     def set_mode_startend(self):
-        """Включает режим установки точек старта/финиша."""
-        start_exists = any(cell == 2 for row in self.board for cell in row)
-        end_exists = any(cell == 3 for row in self.board for cell in row)
-        if start_exists and end_exists:
-            self.set_status("Старт и конец уже установлены. Очистите поле для нового выбора.")
+        # Если уже установлены и старт, и финиш, не разрешаем повторную установку
+        if any(cell == 2 for row in self.board.board for cell in row) and \
+                any(cell == 3 for row in self.board.board for cell in row):
+            self.set_status("Старт и Финиш уже установлены")
             return
         self.current_mode = "combined"
         self.combined_step = "start"
-        self.set_status("Выберите ячейку для старта (A)")
+        self.set_status("Выберите старт (A)")
 
     def start_tracing(self):
-        """Запускает алгоритм трассировки."""
-        self.set_status("Запущена трассировка")
-        print("Запущена трассировка")
+        # Ищем координаты A и B
+        start = None
+        finish = None
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] == 2:
+                    start = (r, c)
+                elif self.board.board[r][c] == 3:
+                    finish = (r, c)
+        if start is None or finish is None:
+            self.set_status("Не заданы и старт, и финиш")
+            return
+
+        # Создаем КОПИЮ поля для алгоритма
+        grid_copy = [row.copy() for row in self.board.board]
+        # Ставим 0, чтобы волна могла идти
+        grid_copy[start[0]][start[1]] = 0
+        grid_copy[finish[0]][finish[1]] = 0
+
+        tracer = Tracer(grid_copy)
+        wave_s, wave_f, meet = tracer.bidirectional_trace(start, finish)
+
+        self.board.wave_start = wave_s
+        self.board.wave_finish = wave_f
+
+        if meet:
+            self.set_status(f"Пересечение волн в {meet}")
+            # Восстанавливаем путь
+            path_s = Tracer.reconstruct_path(wave_s, start, meet)
+            path_f = Tracer.reconstruct_path(wave_f, finish, meet)
+            path_f.reverse()
+            full_path = path_s + path_f[1:]
+
+            # Помечаем клетки пути значением 4 (например)
+            for (rr, cc) in full_path:
+                # Не затираем A и B
+                if self.board.board[rr][cc] not in (2, 3):
+                    self.board.board[rr][cc] = 5
+
+            self.set_status(f"Путь найден, длина: {len(full_path)}")
+        else:
+            self.set_status("Путь не найден")
+
+
+
+        # Если у вас в основном цикле уже идёт перерисовка,
+        # этого достаточно. Иначе нужно явно вызвать:
+        # self.board.draw(self.screen)
+        # pygame.display.flip()
+
+
+
+
 
     def step_trace(self):
-        """Запускает пошаговую трассировку."""
-        self.set_status("Пошаговая трассировка запущена")
-        print("Пошаговая трассировка")
+        # Находим координаты старт (A) и финиш (B) из основного поля (без изменений)
+        start = None
+        finish = None
+        for r in range(self.board.rows):
+            for c in range(self.board.cols):
+                if self.board.board[r][c] == 2:
+                    start = (r, c)
+                elif self.board.board[r][c] == 3:
+                    finish = (r, c)
+        if start is None or finish is None:
+            self.set_status("Не заданы и старт, и финиш")
+            return
+
+        # Вместо того чтобы стирать метки A и B в основном поле,
+        # создаём КОПИЮ поля для алгоритма трассировки
+        grid_copy = [row.copy() for row in self.board.board]
+        grid_copy[start[0]][start[1]] = 0
+        grid_copy[finish[0]][finish[1]] = 0
+
+        tracer = Tracer(grid_copy)
+        step_generator = tracer.step_by_step_trace(start, finish)
+        # Выполнение пошаговой трассировки
+        for iteration, wave_start, wave_finish, meeting in step_generator:
+            self.board.wave_start = wave_start
+            self.board.wave_finish = wave_finish
+
+            # Перерисовка экрана
+            self.screen.fill(self.theme["background"])
+            self.board.draw(self.screen)
+            for button in self.buttons:
+                button.draw(self.screen)
+            if self.text_input:
+                self.text_input.draw(self.screen)
+            self.draw_status_bar()
+            self.menu_bar.draw(self.screen)
+            pygame.display.flip()
+
+            # Задержка для видимости шага
+            pygame.time.wait(500)
+            if meeting:
+                self.set_status(f"Волны встретились в клетке {meeting}")
+                break
+
+
 
     def stop_tracing(self):
-        """Останавливает трассировку."""
         self.set_status("Трассировка остановлена")
         print("Трассировка остановлена")
 
     def update_board_size(self, new_size):
-        """Обновляет размер сетки и пересоздает поле."""
-        self.grid_size = new_size
-        self.rows = new_size
-        self.cols = new_size
-        self.cell_size = self.board_rect.width // self.cols
-        self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
-        self.set_status(f"Размер поля обновлён: {new_size}x{new_size}")
-
-    def draw_board(self):
-        """Отрисовывает поле трассировки и его содержимое."""
-        pygame.draw.rect(self.screen, self.theme["board_bg"], self.board_rect, border_radius=10)
-        for row in range(self.rows):
-            for col in range(self.cols):
-                rect = pygame.Rect(
-                    self.board_rect.x + col * self.cell_size,
-                    self.board_rect.y + row * self.cell_size,
-                    self.cell_size,
-                    self.cell_size
-                )
-                cell_val = self.board[row][col]
-                if cell_val == 1:
-                    pygame.draw.rect(self.screen, (160, 160, 160), rect, border_radius=5)
-                elif cell_val == 2:
-                    pygame.draw.rect(self.screen, self.theme["board_bg"], rect)
-                    font = pygame.font.SysFont("Segoe UI", self.cell_size - 4)
-                    text_surf = font.render("A", True, (0, 0, 0))
-                    text_rect = text_surf.get_rect(center=rect.center)
-                    self.screen.blit(text_surf, text_rect)
-                elif cell_val == 3:
-                    pygame.draw.rect(self.screen, self.theme["board_bg"], rect)
-                    font = pygame.font.SysFont("Segoe UI", self.cell_size - 4)
-                    text_surf = font.render("B", True, (0, 0, 0))
-                    text_rect = text_surf.get_rect(center=rect.center)
-                    self.screen.blit(text_surf, text_rect)
-                pygame.draw.rect(self.screen, self.theme["grid_color"], rect, 1)
-
-    def draw_status_bar(self):
-        """Отрисовывает строку состояния в нижней части окна."""
-        pygame.draw.rect(self.screen, self.theme["status_bg"], self.status_bar_rect, border_radius=5)
-        msg = self.hover_status if self.hover_status else self.status_message
-        text_surf = self.status_font.render(msg, True, (0, 0, 0))
-        self.screen.blit(
-            text_surf,
-            (
-                self.status_bar_rect.x + 10,
-                self.status_bar_rect.y + (self.status_bar_rect.height - text_surf.get_height()) // 2
-            )
-        )
-
-    def handle_board_click(self, pos):
-        """Обрабатывает клики по полю (в зависимости от выбранного режима)."""
-        if not self.board_rect.collidepoint(pos):
-            return
-        col = (pos[0] - self.board_rect.x) // self.cell_size
-        row = (pos[1] - self.board_rect.y) // self.cell_size
-        if row < 0 or row >= self.rows or col < 0 or col >= self.cols:
-            return
-        if self.current_mode == "obstacle":
-            if self.board[row][col] in (2, 3):
-                return
-            if self.board[row][col] == 0:
-                self.board[row][col] = 1
-                self.set_status(f"Препятствие установлено в ({row}, {col})")
-            elif self.board[row][col] == 1:
-                self.board[row][col] = 0
-                self.set_status(f"Препятствие удалено в ({row}, {col})")
-        elif self.current_mode == "combined":
-            if self.combined_step == "start":
-                if self.board[row][col] == 0:
-                    self.board[row][col] = 2
-                    self.combined_step = "end"
-                    self.set_status("Старт установлен. Выберите ячейку для конца (B)")
-            elif self.combined_step == "end":
-                if self.board[row][col] == 0:
-                    self.board[row][col] = 3
-                    self.current_mode = None
-                    self.combined_step = None
-                    self.set_status("Старт и конец установлены")
+        self.board.update_size(new_size)
+        self.set_status(f"Размер поля: {new_size}x{new_size}")
 
     def set_status(self, message):
-        """Устанавливает сообщение в строке состояния и выводит его в консоль."""
         self.status_message = message
         print(message)
 
+    def draw_status_bar(self):
+        pygame.draw.rect(self.screen, self.theme["status_bg"], self.status_bar_rect, border_radius=5)
+        text_surf = self.status_font.render(self.status_message, True, (0, 0, 0))
+        self.screen.blit(text_surf, (self.status_bar_rect.x + 10,
+                                     self.status_bar_rect.y + (self.status_bar_rect.height - text_surf.get_height()) // 2))
+
     def run(self):
-        """Главный цикл приложения."""
         running = True
         while running:
             dt = self.clock.tick(60)
             self.highlight_timer += dt
-            self.hover_status = None
+            self.hover_status = ""
             mouse_pos = pygame.mouse.get_pos()
 
-            # Обработка событий меню
             for event in pygame.event.get():
-                if self.handle_menu_event(event):
+                if self.menu_bar.handle_event(event):
                     continue
                 if event.type == pygame.QUIT:
                     running = False
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self.board_rect.collidepoint(event.pos):
-                        self.handle_board_click(event.pos)
+                        self.current_mode, self.combined_step = self.board.handle_click(
+                            event.pos, self.current_mode, self.combined_step)
                 for button in self.buttons:
                     button.handle_event(event)
                 if self.text_input:
@@ -577,32 +473,22 @@ class MainWindow:
                     if new_size > 0:
                         self.update_board_size(new_size)
                     else:
-                        self.set_status("Введите положительное число.")
+                        self.set_status("Введите положительное число")
                 except ValueError:
-                    self.set_status("Неверный ввод. Введите число.")
+                    self.set_status("Неверный ввод")
                 self.text_input = None
-
             if self.text_input:
                 self.text_input.update(dt)
 
             self.screen.fill(self.theme["background"])
-            self.draw_board()
+            self.board.draw(self.screen)
             for button in self.buttons:
                 button.draw(self.screen)
-
-            # Анимация подсветки выбранного режима
-            if self.current_mode in self.mode_buttons:
-                active_button = self.mode_buttons[self.current_mode]
-                pulse = 2 + int(2 * (math.sin(self.highlight_timer * 0.005) + 1) / 2)
-                highlight_rect = active_button.rect.inflate(6, 6)
-                pygame.draw.rect(self.screen, self.theme["button"]["active_border"],
-                                 highlight_rect, pulse, border_radius=active_button.rect.height // 4)
-
             if self.text_input:
                 self.text_input.draw(self.screen)
             self.draw_status_bar()
-            self.draw_menu_bar()
+            self.menu_bar.draw(self.screen)
             pygame.display.flip()
-
         pygame.quit()
         sys.exit()
+
