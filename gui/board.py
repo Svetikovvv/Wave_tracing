@@ -10,17 +10,13 @@ class Board:
         self.cell_size = self.rect.width // self.cols
         self.board = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
 
-
-        # Изменение: добавляем атрибуты для хранения данных волн
         self.wave_start = None
         self.wave_finish = None
 
     def draw(self, screen):
         pygame.draw.rect(screen, self.theme["board_bg"], self.rect, border_radius=10)
 
-        # Шрифт для вывода составного значения
         font_small = pygame.font.SysFont("Segoe UI", max(12, self.cell_size // 4))
-        # Изменение: новая карта стрелок (переставляем: U→"↓", D→"↑", R→"←", L→"→")
         arrow_map = {"U": "↓", "R": "←", "D": "↑", "L": "→"}
 
         for row in range(self.rows):
@@ -33,7 +29,6 @@ class Board:
                 )
                 cell_val = self.board[row][col]
 
-                # Рисуем фон клетки
                 if cell_val == 1:
                     pygame.draw.rect(screen, (160, 160, 160), cell_rect, border_radius=5)
                 elif cell_val == 2:
@@ -45,9 +40,7 @@ class Board:
                 else:
                     pygame.draw.rect(screen, self.theme["board_bg"], cell_rect)
 
-                # Отображаем данные волны только если клетка не является стартом/финишем
                 if cell_val not in (2, 3):
-                    # Волна старта
                     if self.wave_start:
                         data_s = self.wave_start[row][col]
                         if data_s is not None:
@@ -65,7 +58,6 @@ class Board:
                                 arrow_rect = arrow_surf.get_rect(center=cell_rect.center)
                                 screen.blit(arrow_surf, arrow_rect)
 
-                    # Волна финиша
                     if self.wave_finish:
                         data_f = self.wave_finish[row][col]
                         if data_f is not None:
@@ -83,17 +75,23 @@ class Board:
                                 arrow_rect = arrow_surf.get_rect(center=cell_rect.center)
                                 screen.blit(arrow_surf, arrow_rect)
 
-                # Отрисовка итогового пути:
                 if cell_val == 4:
-                    # Обычный путь (например, желтый) – можно оставить для полного трассирования
                     overlay_path = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
                     overlay_path.fill((255, 255, 0, 128))
                     screen.blit(overlay_path, cell_rect)
                 elif cell_val == 5:
-                    # Изменение: новый цвет для итогового пути при пошаговой трассировке (например, оранжевый)
                     overlay_path = pygame.Surface((self.cell_size, self.cell_size), pygame.SRCALPHA)
                     overlay_path.fill((255, 165, 0, 128))
                     screen.blit(overlay_path, cell_rect)
+                    if hasattr(self, "final_path_arrows") and (row, col) in self.final_path_arrows:
+                        arrow = self.final_path_arrows[(row, col)]
+                        big_font = pygame.font.SysFont("Segoe UI", int(self.cell_size * 0.6))
+                        arrow_surf = big_font.render(arrow, True, (0, 0, 0))
+                        arrow_rect = arrow_surf.get_rect()
+                        arrow_rect.centerx = cell_rect.centerx
+                        arrow_rect.centery = cell_rect.centery - 2
+                        screen.blit(arrow_surf, arrow_rect)
+
 
                 pygame.draw.rect(screen, self.theme["grid_color"], cell_rect, 1)
 

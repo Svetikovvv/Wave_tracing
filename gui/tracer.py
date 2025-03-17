@@ -3,7 +3,7 @@ from collections import deque
 class Tracer:
     """
     Двунаправленная трассировка методом встречной волны.
-    Вместо iteration*10 + priority каждая новая ячейка получает уникальный порядковый номер
+    Каждая новая ячейка получает уникальный порядковый номер
     в порядке, в котором она извлекается из очереди BFS (соблюдая приоритет просмотра соседей).
     """
 
@@ -20,7 +20,7 @@ class Tracer:
     def bidirectional_trace(self, start, finish):
         """
         Запускает двунаправленную волну: BFS от A и BFS от B.
-        На каждом "уровне" мы берём все клетки очереди старта и все клетки очереди финиша,
+        На каждом уровне берём все клетки очереди старта и все клетки очереди финиша,
         расширяем их соседей в порядке (вверх, вправо, вниз, влево).
         Каждая новая клетка получает уникальный порядковый номер (label_s или label_f).
         Если при расширении появляются пересечения, выбираем клетку с минимальной суммой (label_s + label_f).
@@ -32,30 +32,23 @@ class Tracer:
                  wave_finish[r][c] = (label_f, direction_f),
                  meeting_point – клетка пересечения или None
         """
-        # Матрицы для хранения (label, direction)
         wave_start = [[None for _ in range(self.cols)] for _ in range(self.rows)]
         wave_finish = [[None for _ in range(self.cols)] for _ in range(self.rows)]
 
-        # Очереди BFS
         q_start = deque()
         q_finish = deque()
 
         sr, sc = start
         fr, fc = finish
 
-        # Стартовые точки получают номер 0
         wave_start[sr][sc] = (0, None)
         wave_finish[fr][fc] = (0, None)
         q_start.append((sr, sc))
         q_finish.append((fr, fc))
 
-        # Счётчики для новой нумерации
-        # Каждая новая клетка, открытая волной старта, получает label_s + 1
-        # Каждая новая клетка, открытая волной финиша, получает label_f + 1
         label_counter_s = 1
         label_counter_f = 1
 
-        # Порядок просмотра соседей: верх, вправо, вниз, влево
         directions = [
             ("U", -1, 0),
             ("R", 0, 1),
@@ -71,24 +64,19 @@ class Tracer:
         best_meeting = None
         best_sum = None
 
-        # Пока есть клетки в обеих очередях
         while q_start and q_finish:
-            # 1) Расширяем волну от старта (A)
             new_start_cells = []
             for _ in range(len(q_start)):
                 r, c = q_start.popleft()
                 current_label_s, _ = wave_start[r][c]
-                # Если мы уже дошли до B, можно проверять пересечение
                 for dname, dr, dc in directions:
                     nr, nc = r + dr, c + dc
                     if is_valid(nr, nc, wave_start):
-                        # Присваиваем следующий номер
                         wave_start[nr][nc] = (label_counter_s, dname)
                         label_counter_s += 1
                         q_start.append((nr, nc))
                         new_start_cells.append((nr, nc))
 
-            # 2) Расширяем волну от финиша (B)
             new_finish_cells = []
             for _ in range(len(q_finish)):
                 r, c = q_finish.popleft()
@@ -101,7 +89,6 @@ class Tracer:
                         q_finish.append((nr, nc))
                         new_finish_cells.append((nr, nc))
 
-            # 3) Проверяем пересечения среди новых клеток
             intersections = []
             for (r, c) in new_start_cells:
                 if wave_finish[r][c] is not None:
@@ -111,7 +98,6 @@ class Tracer:
                     intersections.append((r, c))
 
             if intersections:
-                # Ищем минимальную сумму (label_s + label_f)
                 for (r, c) in intersections:
                     label_s_val, _ = wave_start[r][c]
                     label_f_val, _ = wave_finish[r][c]
@@ -121,16 +107,13 @@ class Tracer:
                         best_meeting = (r, c)
                 return wave_start, wave_finish, best_meeting
 
-        # Если очереди опустели, пересечений нет
         return wave_start, wave_finish, None
 
     def step_by_step_trace(self, start, finish):
         """
-        Генератор для пошаговой (по уровням) двунаправленной волны.
-        На каждом "уровне" извлекаем все клетки очереди старта, затем все клетки очереди финиша,
+        Генератор для пошаговой двунаправленной волны.
+        На каждом уровне извлекаем все клетки очереди старта, затем все клетки очереди финиша,
         назначаем новые номера в порядке обнаружения. Если есть пересечения – завершаем.
-
-        yield (iteration, wave_start, wave_finish, best_meeting)
         """
         wave_start = [[None for _ in range(self.cols)] for _ in range(self.rows)]
         wave_finish = [[None for _ in range(self.cols)] for _ in range(self.rows)]
@@ -145,7 +128,6 @@ class Tracer:
         q_start.append((sr, sc))
         q_finish.append((fr, fc))
 
-        # Счётчики для новой нумерации
         label_counter_s = 1
         label_counter_f = 1
 
@@ -190,7 +172,6 @@ class Tracer:
                         q_finish.append((nr, nc))
                         new_finish_cells.append((nr, nc))
 
-            # Проверяем пересечения
             intersections = []
             for (r, c) in new_start_cells:
                 if wave_finish[r][c] is not None:
@@ -212,14 +193,13 @@ class Tracer:
 
             yield iteration, wave_start, wave_finish, None
 
-        # Нет пути
         yield iteration, wave_start, wave_finish, None
 
     @staticmethod
     def reconstruct_path(wave, origin, meeting):
         """
         Восстанавливает путь в матрице wave (label, direction),
-        двигаясь "назад" по direction: U->(r+1), R->(c-1), D->(r-1), L->(c+1).
+        двигаясь назад по direction: U->(r+1), R->(c-1), D->(r-1), L->(c+1).
         """
         path = []
         r, c = meeting
